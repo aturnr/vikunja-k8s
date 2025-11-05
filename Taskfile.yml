@@ -1,0 +1,108 @@
+version: '3'
+
+vars:
+
+  # Common
+  HELM_CHARTS_DIRECTORY: charts
+
+  # Applictation
+  APP_HELM_DEPLOYMENT_NAME: test
+  APP_HELM_CHART_NAME: vikunja
+  APP_HELM_CHART_DIRECTORY: "{{.HELM_CHARTS_DIRECTORY}}/{{.APP_HELM_CHART_NAME}}"
+  APP_HELM_CHART_NAMESPACE: vikunja
+  APP_HELM_CHART_VALUES: "{{.APP_HELM_CHART_DIRECTORY}}/local.values.yaml"
+
+  # Database
+  DATABASE_HELM_DEPLOYMENT_NAME: test
+  DATABASE_HELM_CHART_NAME: postgres
+  DATABASE_HELM_CHART_DIRECTORY: "{{.HELM_CHARTS_DIRECTORY}}/{{.DATABASE_HELM_CHART_NAME}}"
+  DATABASE_HELM_CHART_NAMESPACE: postgres
+  DATABASE_HELM_CHART_VALUES: "{{.DATABASE_HELM_CHART_DIRECTORY}}/local.values.yaml"
+
+tasks:
+  
+  k8s:set-context: 
+    desc: Set Kubernetes cluster context
+    preconditions:
+      - command -v kind
+      - command -v kubectl
+    vars:
+      KIND_CLUSTER_NAME: kind-cluster
+    cmds:
+      - kind export kubeconfig --name {{.KIND_CLUSTER_NAME}}
+      - kubectl config set-context {{.KIND_CLUSTER_NAME}}
+
+  db:start:
+    desc: Start Database
+    cmds:
+      - kubectl get namespaces | grep -q {{.DATABASE_HELM_CHART_NAMESPACE}} || kubectl create namespace {{.DATABASE_HELM_CHART_NAMESPACE}}
+      - kubectl --namespace {{.DATABASE_HELM_CHART_NAMESPACE}} apply -f manifests/postgres.secret.yaml
+      - helm --namespace {{.DATABASE_HELM_CHART_NAMESPACE}} install -f {{.DATABASE_HELM_CHART_VALUES}} "{{.DATABASE_HELM_DEPLOYMENT_NAME}}" ./{{.DATABASE_HELM_CHART_DIRECTORY}}
+
+  db:stop:
+    desc: Stop Database
+    cmds:
+      - kubectl get namespaces | grep -qv {{.DATABASE_HELM_CHART_NAMESPACE}} || kubectl create namespace {{.DATABASE_HELM_CHART_NAMESPACE}}
+      - kubectl --namespace {{.DATABASE_HELM_CHART_NAMESPACE}} delete -f manifests/postgres.secret.yaml
+      - helm --namespace {{.DATABASE_HELM_CHART_NAMESPACE}} uninstall {{.DATABASE_HELM_DEPLOYMENT_NAME}}
+
+  db:exec:
+    desc: Exec into database
+    vars:
+      POSTGRES_POD:
+        sh: kubectl --namespace {{.DATABASE_HELM_CHART_NAMESPACE}} get pods | awk '/{{.DATABASE_HELM_DEPLOYMENT_NAME}}/ {print $1}' | head -n1
+    cmds:
+      - kubectl --namespace {{.DATABASE_HELM_CHART_NAMESPACE}} exec -i -t pods/{{.POSTGRES_POD}} -- psql
+
+  app:start:
+    desc: Start application
+    deps: [k8s:set-context]
+    cmds:
+      - task: db:start
+      - kubectl get namespaces | grep -q {{.APP_HELM_CHART_NAMESPACE}} || kubectl create namespace {{.APP_HELM_CHART_NAMESPACE}}
+      - kubectl --namespace {{.APP_HELM_CHART_NAMESPACE}} apply -f manifests/postgres.secret.yaml
+      - helm --namespace {{.APP_HELM_CHART_NAMESPACE}} install -f {{.APP_HELM_CHART_VALUES}} "{{.APP_HELM_DEPLOYMENT_NAME}}" ./{{.APP_HELM_CHART_DIRECTORY}}
+  
+  app:stop:
+    desc: Stop application
+    deps: [k8s:set-context]
+    cmds:
+      - kubectl get namespaces | grep -qv {{.APP_HELM_CHART_NAMESPACE}} || kubectl create namespace {{.APP_HELM_CHART_NAMESPACE}}
+      - kubectl --namespace {{.APP_HELM_CHART_NAMESPACE}} delete -f manifests/postgres.secret.yaml
+      - helm --namespace {{.APP_HELM_CHART_NAMESPACE}} uninstall "{{.APP_HELM_DEPLOYMENT_NAME}}"
+      - task: db:stop
+
+  app:manifests:
+    desc: Print manifists using helm template
+    cmds:
+      - helm template "{{.APP_HELM_DEPLOYMENT_NAME}}" ./charts/{{.APP_HELM_CHART_NAME}}
+
+  app:logs:
+    desc: Follow logs for the application
+    vars:
+      DEPLOYMENT_NAME: "{{.APP_HELM_DEPLOYMENT_NAME}}-{{.APP_HELM_CHART_NAME}}"
+    cmds:
+      - |
+        kubectl --namespace {{.APP_HELM_CHART_NAMESPACE}} logs deployments/{{.DEPLOYMENT_NAME}} --follow
+
+  app:ping:
+    desc: Basic ping to check the application alive
+    preconditions:
+      - command -v curl
+    vars:
+      SERVICE_NAME: "{{.APP_HELM_DEPLOYMENT_NAME}}-{{.APP_HELM_CHART_NAME}}"
+      SERVICE_PORT: 3456
+      FORWARD_PORT: 8080
+      SITE_URI: "http://127.0.0.1:{{.FORWARD_PORT}}"
+      EXPECTED_HTTP_CODE: 200
+    silent: true
+    cmds:
+      - |
+        kubectl --namespace {{.APP_HELM_CHART_NAMESPACE}} port-forward services/{{.SERVICE_NAME}} {{.FORWARD_PORT}}:{{.SERVICE_PORT}} > /dev/null &
+        sleep 1
+        if [ "$(curl -s -o /dev/null --insecure -w "%{http_code}" {{.SITE_URI}})" == "{{.EXPECTED_HTTP_CODE}}" ]; then
+          echo "OK"
+        else
+          echo "FAIL"
+        fi
+        pkill kubectl

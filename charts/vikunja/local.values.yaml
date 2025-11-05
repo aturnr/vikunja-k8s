@@ -1,0 +1,65 @@
+
+# Replica count above 1 for high availibility
+replicaCount: 2
+
+# Postgres Configurations
+env:
+  - name: VIKUNJA_SERVICE_PUBLICURL
+    value: http://vikunja.local
+  - name: VIKUNJA_DATABASE_HOST
+    value: test-postgres.postgres.svc.cluster.local
+  - name: VIKUNJA_DATABASE_TYPE
+    value: postgres
+  - name: VIKUNJA_DATABASE_DATABASE
+    value: vikunja
+  - name: VIKUNJA_DATABASE_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: postgres
+        key: POSTGRES_PASSWORD
+  - name: VIKUNJA_DATABASE_USER
+    valueFrom:
+      secretKeyRef:
+        name: postgres
+        key: POSTGRES_USER
+
+# Additional Performance Tuning at Pod Level
+podSecurityContext: {}
+  # sysctls:
+  #  - name: kernel.shm_rmid_forced
+  #    value: "0"
+  #  - name: net.core.somaxconn
+  #    value: "1024"
+  #  - name: kernel.msgmax
+  #    value: "65536"
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 2048Mi
+  requests:
+    cpu: 500m
+    memory: 1024Mi
+
+
+# Resilient to failures: fail fast + remove the pod from service
+livenessProbe:
+  httpGet:
+    path: /
+    port: http
+readinessProbe:
+  httpGet:
+    path: /
+    port: http
+
+# Resilient to failures: make sure replicas are in difference failure domains i.e. az's
+affinity: {}
+#  podAntiAffinity:
+#    requiredDuringSchedulingIgnoredDuringExecution:
+#      - labelSelector:
+#          matchExpressions:
+#            - key: app.kubernetes.io/instance
+#              operator: In
+#              values:
+#                - test
+#        topologyKey: failure-domain.beta.kubernetes.io/zone

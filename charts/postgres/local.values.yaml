@@ -1,0 +1,13 @@
+resources:
+  limits:
+    cpu: 1000m
+    memory: 2048Mi
+  requests:
+    cpu: 500m
+    memory: 1024Mi
+
+storageSize: 2Gi
+
+envFrom:
+  - secretRef:
+      name: postgres

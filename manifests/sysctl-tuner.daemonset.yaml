@@ -1,0 +1,34 @@
+# Ref: https://www.scaleway.com/en/docs/kubernetes/reference-content/modifying-kernel-parameters-kubernetes-cluster/
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: sysctl-tuner
+  namespace: kube-system
+  labels:
+    app: sysctl-tuner
+spec:
+  selector:
+    matchLabels:
+      name: sysctl-tuner
+  template:
+    metadata:
+      labels:
+        name: sysctl-tuner
+    spec:
+      hostNetwork: true  # Share the host's network namespace for network-related sysctl changes
+      hostPID: true  # Access the host's PID namespace for sysctl commands
+      containers:
+      - name: sysctl # Container to set sysctl parameters
+        image: busybox
+        securityContext:
+          privileged: true # Privileged access to modify sysctl settings on the host
+        command:
+        - /bin/sh
+        - -c
+        # Maximum Socket Receive Buffer
+        - sysctl -w net.core.rmem_max=134217728
+        # Maximum Socket Send Buffer
+        - sysctl -w net.core.wmem_max=134217728
+          sleep infinity
+      tolerations:
+      - operator: Exists
